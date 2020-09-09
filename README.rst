@@ -23,7 +23,7 @@ Then configure your Ecommerce instance to use the Saferpay payment processor::
 
     tutor config save --set 'ECOMMERCE_ENABLED_PAYMENT_PROCESSORS=["saferpay"]'
     tutor config save --set 'ECOMMERCE_EXTRA_PAYMENT_PROCESSOR_CLASSES=["openedx_saferpay.processor.Saferpay"]'
-    tutor config save --set 'ECOMMERCE_ENABLED_CLIENT_SIDE_PAYMENT_URLS={"saferpay": "openedx_saferpay.urls"}'
+    tutor config save --set 'ECOMMERCE_EXTRA_PAYMENT_PROCESSOR_URLS={"saferpay": "openedx_saferpay.urls"}'
 
 Save your Saferpay credentials to saferpay.yml::
 
