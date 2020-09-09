@@ -34,7 +34,7 @@ Save your Saferpay credentials to saferpay.yml::
         api_password: JsonApiPwdX_XXXX
         customer_id: 'ABC'
         terminal_id: 'GHI'
-    $ tutor config save --set "ECOMMERCE_PAYMENT_PROCESSORS=$(cat saferpay.yml.yml)"
+    $ tutor config save --set "ECOMMERCE_PAYMENT_PROCESSORS=$(cat saferpay.yml)"
 
 Run initialization scripts::
 
