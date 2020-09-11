@@ -45,7 +45,7 @@ class Saferpay(BasePaymentProcessor):
     NAME = "saferpay"
     TITLE = "Saferpay"
     API_REQUEST_TIMEOUT_SECONDS = 10
-    API_URL = "https://www.saferpay.com/api"
+    API_URL = "https://www.saferpay.com/api/"
 
     def __init__(self, site):
         super().__init__(site)
