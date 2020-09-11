@@ -2,6 +2,7 @@ import base64
 import json
 import logging
 import requests
+import simplejson.errors
 from urllib.parse import urljoin
 from uuid import uuid4
 
@@ -126,7 +127,7 @@ class Saferpay(BasePaymentProcessor):
         Verify that the payment was successfully processed -- because Trust but Verify.
         https://saferpay.github.io/jsonapi/index.html#Payment_v1_PaymentPage_Assert
         If payment did not succeed, raise GatewayError and log error.
-    
+
         Args:
             response (str): this is actually the transaction ID.
         """
@@ -187,7 +188,7 @@ class Saferpay(BasePaymentProcessor):
 
         try:
             response_data = response.json()
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, simplejson.errors.JSONDecodeError):
             self.raise_api_error(
                 "Could not parse JSON content from response", response, {}, basket
             )
