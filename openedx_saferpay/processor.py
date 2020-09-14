@@ -1,13 +1,13 @@
 import base64
 import json
 import logging
-import requests
 import simplejson.errors
 from urllib.parse import urljoin
 from uuid import uuid4
 
 from django.urls import reverse
 from oscar.apps.payment.exceptions import GatewayError
+import requests
 
 from ecommerce.core.url_utils import get_ecommerce_url
 from ecommerce.extensions.payment.processors import (
@@ -35,11 +35,12 @@ class Saferpay(BasePaymentProcessor):
     The payment processor is supposed to be configured as follows:
 
         saferpay:
-            # api_url: https://test.saferpay.com/api/ # optional
             api_username: API_ABC_DEF
             api_password: JsonApiPwdX_XXXX
             customer_id: 'ABC'
             terminal_id: 'GHI'
+            # api_url is optional: in testing set to https://test.saferpay.com/api/
+            # api_url: https://www.saferpay.com/api/
     """
 
     NAME = "saferpay"
@@ -72,31 +73,28 @@ class Saferpay(BasePaymentProcessor):
         success_payment_processor_response = self.record_processor_response(
             {}, transaction_id=None, basket=basket
         )
-        data = self.get_base_request_data()
         description = "\n".join([line.product.title for line in basket.lines.all()])
-        data.update(
-            {
-                "TerminalId": self.terminal_id,
-                "Payment": {
-                    "Amount": {
-                        # Amount in cents
-                        "Value": str(int(100 * basket.total_incl_tax)),
-                        "CurrencyCode": basket.currency,
-                    },
-                    "OrderId": str(basket.order_number),
-                    "Description": description,
+        data = {
+            "TerminalId": self.terminal_id,
+            "Payment": {
+                "Amount": {
+                    # Amount in cents
+                    "Value": str(int(100 * basket.total_incl_tax)),
+                    "CurrencyCode": basket.currency,
                 },
-                "ReturnUrls": {
-                    "Success": get_ecommerce_url(
-                        reverse(
-                            "saferpay:callback_success",
-                            kwargs={"ppr_id": success_payment_processor_response.id},
-                        )
-                    ),
-                    "Fail": get_ecommerce_url(self.cancel_url),
-                },
-            }
-        )
+                "OrderId": str(basket.order_number),
+                "Description": description,
+            },
+            "ReturnUrls": {
+                "Success": get_ecommerce_url(
+                    reverse(
+                        "saferpay:callback_success",
+                        kwargs={"ppr_id": success_payment_processor_response.id},
+                    )
+                ),
+                "Fail": get_ecommerce_url(self.cancel_url),
+            },
+        }
         response_data = self.make_api_json_request(
             "Payment/v1/PaymentPage/Initialize", method="POST", data=data, basket=basket
         )
@@ -128,31 +126,87 @@ class Saferpay(BasePaymentProcessor):
         https://saferpay.github.io/jsonapi/index.html#Payment_v1_PaymentPage_Assert
         If payment did not succeed, raise GatewayError and log error.
 
+        Once payment has been verified, call Capture to finalize the payment
+        https://saferpay.github.io/jsonapi/index.html#Payment_v1_Transaction_Capture
+        The generated CaptureId will be used to generate refunds.
+
         Args:
-            response (str): this is actually the transaction ID.
+            response (str): this is actually the request token.
         """
-        transaction_id = response
-        data = self.get_base_request_data()
-        data["Token"] = transaction_id
+        token = response
+        assert_request_data = {"Token": token}
 
-        # This will raise in case of invalid payment
-        response_data = self.make_api_json_request(
-            "Payment/v1/PaymentPage/Assert", method="POST", data=data, basket=basket
+        # Check payment was successful (this will raise in case of invalid payment)
+        assert_data = self.make_api_json_request(
+            "Payment/v1/PaymentPage/Assert",
+            method="POST",
+            data=assert_request_data,
+            basket=basket,
         )
-        # TODO capture CaptureId to provide refund
+        total = int(assert_data["Transaction"]["Amount"]["Value"]) / 100.0
+        currency = assert_data["Transaction"]["Amount"]["CurrencyCode"]
+        card_number = assert_data["PaymentMeans"]["Card"]["MaskedNumber"]
+        card_type = assert_data["PaymentMeans"]["Brand"]["PaymentMethod"]
+        transaction_id = assert_data["Transaction"]["Id"]
 
-        total = int(response_data["Transaction"]["Amount"]["Value"]) / 100.0
-        currency = response_data["Transaction"]["Amount"]["CurrencyCode"]
-        card_number = response_data["PaymentMeans"]["Card"]["MaskedNumber"]
-        card_type = response_data["PaymentMeans"]["Brand"]["PaymentMethod"]
+        # Finalize payment
+        capture_request_data = {
+            "TransactionReference": {"TransactionId": transaction_id}
+        }
+        capture_data = self.make_api_json_request(
+            "Payment/v1/Transaction/Capture",
+            method="POST",
+            data=capture_request_data,
+            basket=basket,
+        )
+        capture_id = capture_data["CaptureId"]
 
         return HandledProcessorResponse(
-            transaction_id=transaction_id,
+            transaction_id=capture_id,
             total=total,
             currency=currency,
             card_number=card_number,
             card_type=card_type,
         )
+
+    def issue_credit(self, order_number, basket, reference_number, amount, currency):
+        """
+        Refund transaction: https://saferpay.github.io/jsonapi/index.html#Payment_v1_Transaction_Refund
+        Assert refund: https://saferpay.github.io/jsonapi/index.html#Payment_v1_Transaction_AssertRefund
+        Note that this is only available to business license owners.
+        """
+        # Issue refund
+        capture_id = reference_number
+        refund_request_data = {
+            "Refund": {
+                "Amount": {"Value": str(int(amount * 100)), "CurrencyCode": currency}
+            },
+            "CaptureReference": {"CaptureId": capture_id},
+        }
+        refund_data = self.make_api_json_request(
+            "Payment/v1/Transaction/Refund",
+            method="POST",
+            data=refund_request_data,
+            basket=basket,
+        )
+        transaction_id = refund_data["Transaction"]["Id"]
+
+        # Check refund has gone through: note this is only necessary for paydirekt transactions, so we just ignore this
+        # for now
+        # assert_request_data = {
+        #     "TransactionReference": {"TransactionId": transaction_id}
+        # }
+        # assert_data = self.make_api_json_request(
+        #     "Payment/v1/Transaction/AssertRefund",
+        #     method="POST",
+        #     data=assert_request_data,
+        #     basket=basket,
+        # )
+
+        self.record_processor_response(
+            refund_data, transaction_id=transaction_id, basket=basket
+        )
+        return transaction_id
 
     def get_base_request_data(self, retry_indicator=0):
         request_id = str(uuid4())  # TODO log request ID
@@ -175,11 +229,15 @@ class Saferpay(BasePaymentProcessor):
         ).decode()
         headers = {"Authorization": "Basic {}".format(encoded_auth)}
 
+        # Add standard request data
+        request_data = self.get_base_request_data()
+        request_data.update(data)
+
         try:
             # pylint: disable=not-callable
             response = requests_func(
                 url,
-                json=data,
+                json=request_data,
                 headers=headers,
                 timeout=self.API_REQUEST_TIMEOUT_SECONDS,
             )
@@ -217,8 +275,3 @@ class Saferpay(BasePaymentProcessor):
             exc_info=True,
         )
         raise GatewayError(error)
-
-    def issue_credit(self, order_number, basket, reference_number, amount, currency):
-        # TODO implement issue credit
-        # Looks like this is supported only for business licenses: https://saferpay.github.io/jsonapi/index.html#Payment_v1_Transaction_Refund
-        raise NotImplementedError
