@@ -36,6 +36,7 @@ class SaferpaySuccessCallbackView(EdxOrderPlacementMixin, View):
 
         # What follows is basically a copy-paste from paypal's GET view handler
         receipt_url = get_receipt_page_url(
+            request,
             order_number=basket.order_number,
             site_configuration=basket.site.siteconfiguration,
             disable_back_button=True,
